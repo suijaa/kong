@@ -17,6 +17,7 @@ local lower = string.lower
 local type = type
 local error = error
 local tonumber = tonumber
+local yield = coroutine.yield
 local check_phase = phase_checker.check
 local check_not_phase = phase_checker.check_not
 
@@ -684,6 +685,12 @@ local function new(self)
     end
   end
 
+
+  function _REQUEST.proxy()
+    check_phase(PHASES.access)
+    local body = yield("buffered")
+    return body
+  end
 
   return _REQUEST
 end

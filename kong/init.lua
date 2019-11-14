@@ -129,6 +129,25 @@ local TLS_SCHEMES = {
 }
 
 
+local METHODS = {
+  GET       = ngx.HTTP_GET,
+  HEAD      = ngx.HTTP_HEAD,
+  PUT       = ngx.HTTP_PUT,
+  POST      = ngx.HTTP_POST,
+  DELETE    = ngx.HTTP_DELETE,
+  OPTIONS   = ngx.HTTP_OPTIONS,
+  MKCOL     = ngx.HTTP_MKCOL,
+  COPY      = ngx.HTTP_COPY,
+  MOVE      = ngx.HTTP_MOVE,
+  PROPFIND  = ngx.HTTP_PROPFIND,
+  PROPPATCH = ngx.HTTP_PROPPATCH,
+  LOCK      = ngx.HTTP_LOCK,
+  UNLOCK    = ngx.HTTP_UNLOCK,
+  PATCH     = ngx.HTTP_PATCH,
+  TRACE     = ngx.HTTP_TRACE,
+}
+
+
 local declarative_entities
 local schema_state
 
@@ -694,17 +713,32 @@ function Kong.access()
 
   ctx.delay_response = true
 
+  local buffered_count = 0
+  local buffered_plugins
   local plugins_iterator = runloop.get_plugins_iterator()
   for plugin, plugin_conf in plugins_iterator:iterate("access", ctx) do
     if not ctx.delayed_response then
       kong_global.set_named_ctx(kong, "plugin", plugin_conf)
       kong_global.set_namespaced_log(kong, plugin.name)
 
-      local err = coroutine.wrap(plugin.handler.access)(plugin.handler, plugin_conf)
+      local wrapped = coroutine.wrap(plugin.handler.access)
+      local err = wrapped(plugin.handler, plugin_conf)
 
       kong_global.reset_log(kong)
 
-      if err then
+      if err == "buffered" then
+        if buffered_count == 0 then
+          buffered_plugins = {}
+        end
+
+        buffered_count = buffered_count + 1
+        buffered_plugins[buffered_count] = {
+          access = wrapped,
+          name = plugin.name,
+          conf = plugin_conf,
+        }
+
+      elseif err then
         ctx.delay_response = false
 
         kong.log.err(err)
@@ -735,6 +769,47 @@ function Kong.access()
 
   -- we intent to proxy, though balancer may fail on that
   ctx.KONG_PROXIED = true
+
+  if buffered_count > 0 then
+    ngx.req.read_body()
+    local method = METHODS[ngx.req.get_method()]
+    local options = {
+      always_forward_body = true,
+      share_all_vars      = true,
+      method              = method,
+      ctx                 = ngx.ctx,
+    }
+
+    local res
+    if var.kong_proxy_mode == "grpc" then
+      res = ngx.location.capture("/kong_buffered_grpc", options)
+
+    else
+      res = ngx.location.capture("/kong_buffered_http", options)
+    end
+
+    kong_global.set_phase(kong, PHASES.access)
+
+    kong.response.set_headers(res.header)
+
+    for i = 1, buffered_count do
+      local plugin = buffered_plugins[i]
+
+      kong_global.set_named_ctx(kong, "plugin", plugin.conf)
+      kong_global.set_namespaced_log(kong, plugin.name)
+
+      local err = plugin.access(res.body)
+
+      kong_global.reset_log(kong)
+
+      if err then
+        kong.log.err(err)
+        return kong.response.exit(500, { message  = "An unexpected error occurred" })
+      end
+    end
+
+    return kong.response.exit(res.status, res.body)
+  end
 end
 
 

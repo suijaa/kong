@@ -169,7 +169,7 @@ local function new(self, major_version)
   -- kong.response.get_header("X-Another")       -- "foo bar"
   -- kong.response.get_header("X-None")          -- nil
   function _RESPONSE.get_header(name)
-    check_phase(header_body_log)
+    --check_phase(header_body_log)
 
     if type(name) ~= "string" then
       error("header name must be a string", 2)
@@ -225,7 +225,7 @@ local function new(self, major_version)
   -- headers.x_another[1]    -- "foo bar"
   -- headers["X-Another"][2] -- "baz"
   function _RESPONSE.get_headers(max_headers)
-    check_phase(header_body_log)
+    --check_phase(header_body_log)
 
     if max_headers == nil then
       return ngx.resp.get_headers(MAX_HEADERS_DEFAULT)
